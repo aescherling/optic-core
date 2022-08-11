@@ -72,9 +72,13 @@ dispatch_simulations <- function(sim_config, use_future=FALSE, seed=NULL, failur
             }
           }
           if (any(class(r) == "data.frame")) {
+            r$simulation <- i
             r$iter <- j
           } else if (any(class(r) == "list")) {
-            r <- lapply(r, function(x){ x$iter <- j})
+            r <- lapply(r, function(x){ 
+              x$simulation <- i
+              x$iter <- j
+            })
           }
           
           return(r)
@@ -118,9 +122,13 @@ dispatch_simulations <- function(sim_config, use_future=FALSE, seed=NULL, failur
           
         }
         if (class(r) == "data.frame") {
+          r$simulation <- i
           r$iter <- j
         } else if (class(r) == "list") {
-          r <- lapply(r, function(x){ x$iter <- j})
+          r <- lapply(r, function(x){
+            x$simulation <- i
+            x$iter <- j
+          })
         }
         
         sim_results[[j]] <- r
@@ -133,6 +141,7 @@ dispatch_simulations <- function(sim_config, use_future=FALSE, seed=NULL, failur
     # CLEAN UP AND ADD META DATA TO RUN
     #==========================================================================
     #==========================================================================
+
     full_results <- do.call("rbind", sim_results)
     
     # add in config/meta information to the run

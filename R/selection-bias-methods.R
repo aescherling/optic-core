@@ -1,3 +1,245 @@
+#' @title summary.MP
+#'
+#' @description prints a summary of a \code{MP} object.
+#' This modifies the version in the `did` library to return
+#' output as a data frame.
+#' Code copied from https://github.com/bcallaway11/did/blob/master/R/MP.R.
+#'
+#' @param object an \code{MP} object
+#' @param ... extra arguments
+#'
+#' @export
+summary.MP <- function(object, ..., returnOutput = FALSE, verbose = TRUE) {
+  mpobj <- object
+  
+  # call
+  if (verbose) {
+    cat("\n")
+    cat("Call:\n")
+    print(mpobj$DIDparams$call)
+    cat("\n")
+    
+    # citation
+    citation()
+    cat("\n")
+    
+    # group time average treatment effects
+    cat("Group-Time Average Treatment Effects:\n")
+  }
+
+  cband_text1a <- paste0(100*(1-mpobj$alp),"% ")
+  cband_text1b <- ifelse(mpobj$DIDparams$bstrap,
+                         ifelse(mpobj$DIDparams$cband, "Simult. ", "Pointwise "),
+                         "Pointwise ")
+  cband_text1 <- paste0("[", cband_text1a, cband_text1b)
+  
+  cband_lower <- mpobj$att - mpobj$c*mpobj$se
+  cband_upper <- mpobj$att + mpobj$c*mpobj$se
+  
+  sig <- (cband_upper < 0) | (cband_lower > 0)
+  sig[is.na(sig)] <- FALSE
+  sig_text <- ifelse(sig, "*", "")
+  
+  out <- cbind.data.frame(mpobj$group, mpobj$t, mpobj$att, mpobj$se, cband_lower, cband_upper)
+  out <- round(out,4)
+  out <- cbind.data.frame(out, sig_text)
+  
+  
+  colnames(out) <- c("Group", "Time", "ATT(g,t)","Std. Error", cband_text1, "Conf. Band]", "")
+  
+  if (verbose) {
+    print(out, row.names=FALSE)
+    cat("---\n")
+    cat("Signif. codes: `*' confidence band does not cover 0")
+    cat("\n\n")
+  }
+
+  # report pre-test
+  if (!is.null(mpobj$Wpval) & verbose) {
+    cat("P-value for pre-test of parallel trends assumption:  ")
+    cat(as.character(mpobj$Wpval))
+    cat("\n")
+  }
+  
+  
+  
+  # set control group text
+  control_group <- mpobj$DIDparams$control_group
+  control_group_text <- NULL
+  if (control_group == "nevertreated") {
+    control_group_text <- "Never Treated"
+  } else if (control_group == "notyettreated") {
+    control_group_text <- "Not Yet Treated"
+  }
+  
+  if (!is.null(control_group) & verbose) {
+    cat("Control Group:  ")
+    cat(control_group_text)
+    cat(",  ")
+  }
+  
+  if (verbose) {
+    # anticipation periods
+    cat("Anticipation Periods:  ")
+    cat(mpobj$DIDparams$anticipation)
+    cat("\n")
+  }
+  
+  # estimation method text
+  est_method <- mpobj$DIDparams$est_method
+  if (class(est_method)=="character") {
+    est_method_text <- est_method
+    if (est_method == "dr") {
+      est_method_text <- "Doubly Robust"
+    } else if (est_method == "ipw") {
+      est_method_text <- "Inverse Probability Weighting"
+    } else if (est_method == "reg") {
+      est_method_text <- "Outcome Regression"
+    }
+    
+    if (verbose) {
+      cat("Estimation Method:  ")
+      cat(est_method_text)
+      cat("\n")
+    }
+
+  }
+  
+  if (returnOutput) return(out)
+}
+
+
+#' @title Summary Aggregate Treatment Effect Parameter Objects
+#'
+#' @description A function to summarize aggregated treatment effect parameters.
+#' This modifies the version in the `did` library to return
+#' output as a data frame.
+#' Code copied from https://github.com/bcallaway11/did/blob/master/R/AGGTEobj.R.
+#'
+#' @param object an \code{AGGTEobj} object
+#' @param ... other arguments
+#'
+#' @export
+summary.AGGTEobj <- function(object, ..., returnOutput = FALSE, verbose = TRUE) {
+  
+  if (verbose) {
+    # call
+    cat("\n")
+    cat("Call:\n")
+    print(object$call)
+    cat("\n")
+    
+    #citation
+    citation()
+    cat("\n")
+  }
+
+  # overall estimates
+  alp <- object$DIDparams$alp
+  pointwise_cval <- qnorm(1-alp/2)
+  overall_cband_upper <- object$overall.att + pointwise_cval*object$overall.se
+  overall_cband_lower <- object$overall.att - pointwise_cval*object$overall.se
+  out1 <- cbind.data.frame(object$overall.att, object$overall.se, overall_cband_lower, overall_cband_upper)
+  out1 <- round(out1, 4)
+  overall_sig <- (overall_cband_upper < 0) | (overall_cband_lower > 0)
+  overall_sig[is.na(overall_sig)] <- FALSE
+  overall_sig_text <- ifelse(overall_sig, "*", "")
+  out1 <- cbind.data.frame(out1, overall_sig_text)
+  colnames(out1) <- c("ATT","   Std. Error", paste0("    [ ",100*(1-object$DIDparams$alp),"% "), "Conf. Int.]","")
+  
+  if (verbose) {
+    cat("\n")
+    #cat("Overall ATT:  \n")
+    if (object$type=="dynamic") cat("Overall summary of ATT\'s based on event-study/dynamic aggregation:  \n")
+    if (object$type=="group") cat("Overall summary of ATT\'s based on group/cohort aggregation:  \n")
+    if (object$type=="calendar") cat("Overall summary of ATT\'s based on calendar time aggregation:  \n")
+    print(out1, row.names=FALSE)
+    cat("\n\n")
+  }
+
+  
+  # handle cases depending on type
+  if (object$type %in% c("group","dynamic","calendar")) {
+    
+    # header
+    if (object$type=="dynamic") { c1name <- "Event time"; if (verbose) cat("Dynamic Effects:") }
+    if (object$type=="group") { c1name <- "Group"; if (verbose) cat("Group Effects:") }
+    if (object$type=="calendar") { c1name <- "Time"; if (verbose) cat("Time Effects:") }
+    
+    if (verbose) cat("\n")
+    cband_text1a <- paste0(100*(1-object$DIDparams$alp),"% ")
+    cband_text1b <- ifelse(object$DIDparams$bstrap,
+                           ifelse(object$DIDparams$cband, "Simult. ", "Pointwise "),
+                           "Pointwise ")
+    cband_text1 <- paste0("[", cband_text1a, cband_text1b)
+    
+    cband_lower <- object$att.egt - object$crit.val.egt*object$se.egt
+    cband_upper <- object$att.egt + object$crit.val.egt*object$se.egt
+    
+    sig <- (cband_upper < 0) | (cband_lower > 0)
+    sig[is.na(sig)] <- FALSE
+    sig_text <- ifelse(sig, "*", "")
+    
+    out2 <- cbind.data.frame(object$egt, object$att.egt, object$se.egt, cband_lower, cband_upper)
+    out2 <- round(out2, 4)
+    out2 <- cbind.data.frame(out2, sig_text)
+    
+    colnames(out2) <- c(c1name, "Estimate","Std. Error", cband_text1, "Conf. Band]", "")
+    if (verbose) print(out2, row.names=FALSE, justify = "centre")
+  }
+  
+  if (verbose) {
+    cat("---\n")
+    cat("Signif. codes: `*' confidence band does not cover 0")
+    cat("\n\n")
+  }
+  
+  # set control group text
+  control_group <- object$DIDparams$control_group
+  control_group_text <- NULL
+  if (control_group == "nevertreated") {
+    control_group_text <- "Never Treated"
+  } else if (control_group == "notyettreated") {
+    control_group_text <- "Not Yet Treated"
+  }
+  
+  if (!is.null(control_group) & verbose) {
+    cat("Control Group:  ")
+    cat(control_group_text)
+    cat(",  ")
+  }
+  
+  if (verbose) {
+    # anticipation periods
+    cat("Anticipation Periods:  ")
+    cat(object$DIDparams$anticipation)
+    cat("\n")
+  }
+
+  # estimation method text
+  est_method <- object$DIDparams$est_method
+  if (class(est_method)=="character") {
+    est_method_text <- est_method
+    if (est_method == "dr") {
+      est_method_text <- "Doubly Robust"
+    } else if (est_method == "ipw") {
+      est_method_text <- "Inverse Probability Weighting"
+    } else if (est_method == "reg") {
+      est_method_text <- "Outcome Regression"
+    }
+    
+    if (verbose) {
+      cat("Estimation Method:  ")
+      cat(est_method_text)
+      cat("\n")
+    }
+
+  }
+  
+  if (returnOutput) return(list(out1, out2))
+}
+
+
 #######################
 ### SAMPLING METHOD ###
 #######################
@@ -46,10 +288,10 @@ selbias_sample <- function(single_simulation) {
   
   # since this is happening before the model loop in run_iteration, we need to make
   # sure we augment all unique outcomes used by models
-  if(model_type != "drdid"){
+  if (all(model_type != "did")) {
     outcomes <- unique(sapply(single_simulation$models, function(x) { optic::model_terms(x[["model_formula"]])[["lhs"]] }))
-  }else{
-    outcomes <- as.character(single_simulation$models$drdid$model_args$yname)
+  } else if (any(model_type == 'did')) {
+    outcomes <- as.character(single_simulation$models$did$model_args$yname)
   }
   
   # 
@@ -99,6 +341,7 @@ selbias_sample <- function(single_simulation) {
       mutate(trt_pr = exp(logits) / (1 + exp(logits)),
              One_minus_trt_pr = 1-trt_pr) %>%
       # check for cases where prob is 1
+      # (this replaces missing values with 1. why??)
       mutate(trt_pr = case_when(is.na(trt_pr) ~ 1,
                                 TRUE ~ trt_pr)) %>%
       mutate(One_minus_trt_pr = 1 - trt_pr) %>%
@@ -108,19 +351,22 @@ selbias_sample <- function(single_simulation) {
     ##############################
     ### APPLY TREATMENT EFFECT ###
     ##############################
-    x <- apply_treatment_effect(
-      x=x_treat,
-      model_formula=single_simulation$models$fixedeff_linear$model_formula,
-      model_call=single_simulation$models$fixedeff_linear$model_call,
-      te=effect_magnitude,
-      effect_direction=effect_direction,
-      concurrent=FALSE
-    )
+    # x <- apply_treatment_effect(
+    #   x=x_treat,
+    #   model_formula=single_simulation$models$fixedeff_linear$model_formula,
+    #   model_call=single_simulation$models$fixedeff_linear$model_call,
+    #   te=effect_magnitude,
+    #   effect_direction=effect_direction,
+    #   concurrent=FALSE
+    # )
     
     # Update Outcomes (augment outcomes)
+    # the code commented out below doesn't work. values balloon to infinity. temporarily excluding. adam scherling 11/23/2021
+    # x_new <- x %>% dplyr::select(!!as.name(unit_var), !!as.name(time_var), !!as.name(outcomes)) %>%
+    #   rename(new = !!outcomes)
     x_new = x %>%
       filter(!!as.name(time_var) == time) %>%
-      mutate(!!outcomes := 
+      mutate(!!outcomes :=
                !!as.name(outcomes) +
                (a1 * prior_control) +
                (a2 * unemploymentrate) +
@@ -129,6 +375,18 @@ selbias_sample <- function(single_simulation) {
                (a5 * (unemploymentrate ^ 2))) %>%
       dplyr::select(!!as.name(unit_var), !!as.name(time_var), !!as.name(outcomes)) %>%
       rename(new = !!outcomes)
+    
+    # x_new = x %>%
+    #   filter({{time_var}} == time) %>%
+    #   mutate({{outcomes}} := 
+    #            {{outcomes}} +
+    #            (a1 * prior_control) +
+    #            (a2 * unemploymentrate) +
+    #            (a3 * (prior_control * unemploymentrate)) +
+    #            (a4 * (prior_control ^ 2)) +
+    #            (a5 * (unemploymentrate ^ 2))) %>%
+    #   dplyr::select({{unit_var}}, {{time_var}}, {{outcomes}}) %>%
+    #   rename(new = {{outcomes}})
     
     if(t==1){
       x = x %>%
@@ -302,8 +560,14 @@ selbias_sample <- function(single_simulation) {
 selbias_premodel <- function(model_simulation) {
   x <- model_simulation$data
   model <- model_simulation$models
-  outcome <- optic:::model_terms(model$model_formula)[["lhs"]]
-  oo <- dplyr::sym(outcome)
+  
+  if (model$type != "did") {
+    outcome <- optic:::model_terms(model$model_formula)[["lhs"]]
+    oo <- dplyr::sym(outcome)
+  } else if (model$type=='did') {
+    outcome <- as.character(model_simulation$models$model_args$yname)
+    oo <- dplyr::sym(outcome)
+  }
   model_type <- model$type
   balance_statistics <- NULL
   
@@ -333,9 +597,13 @@ selbias_premodel <- function(model_simulation) {
     if (sum(is.na(x[[outcome]])) > 0) {
       stop("multisynth method cannot handle missingness in outcome.")
     }
-  } else if (model_type == "drdid") {
+  } else if (model_type == "did") {
     x$treatment[x$treatment > 0] <- 1
     x$treatment_level[x$treatment_level > 0] <- 1
+    x <- x %>% 
+      group_by(state) %>%
+      mutate(treatment_year = 1 + max(year ^ (1-treatment))) %>% 
+      ungroup()
   }
   
   # get balance information
@@ -401,7 +669,7 @@ selbias_model <- function(model_simulation) {
   model <- model_simulation$models
   x <- model_simulation$data
   
-  if (model_simulation$models$name == "drdid") {
+  if (model_simulation$models$type %in% c("did", "multisynth")) {
     args = c(list(data=x), model[["model_args"]])
   } else {
     args = c(list(data=x, formula=model[["model_formula"]]), model[["model_args"]])
@@ -428,7 +696,14 @@ selbias_model <- function(model_simulation) {
 #' 
 #' @export
 selbias_postmodel <- function(model_simulation) {
-  outcome <- model_terms(model_simulation$models[["model_formula"]])[["lhs"]]
+  
+  
+  if (model_simulation$models$type != "did") {
+    outcome <- model_terms(model_simulation$models[["model_formula"]])[["lhs"]]
+  } else if (model_simulation$models$type == "did") {
+    outcome <- as.character(model_simulation$models$model_args$yname)
+  }
+  
   bias_vals <- model_simulation$globals[["bias_vals"]][[model_simulation$bias_type]][[model_simulation$prior_control]][[model_simulation$bias_size]]
   # get run metadata to merge in after
   meta_data <- data.frame(
@@ -441,6 +716,8 @@ selbias_postmodel <- function(model_simulation) {
     prior_control = model_simulation$prior_control,
     bias_type = model_simulation$bias_type,
     bias_size = model_simulation$bias_size,
+    effect_direction = model_simulation$effect_direction,
+    effect_magnitude = model_simulation$effect_magnitude,
     b0 = bias_vals["b0"],
     b1 = bias_vals["b1"],
     b2 = bias_vals["b2"],
@@ -455,7 +732,7 @@ selbias_postmodel <- function(model_simulation) {
   )
   
   # get model result information and apply standard error adjustments
-  if (model_simulation$models[["type"]] != "multisynth") {
+  if (!(model_simulation$models[["type"]] %in% c("multisynth","did"))) {
     m <- model_simulation$model_result
     cf <- as.data.frame(summary(m)$coefficients)
     cf$variable <- row.names(cf)
@@ -474,10 +751,10 @@ selbias_postmodel <- function(model_simulation) {
       variance=cf[["Std. Error"]] ^ 2,
       t_stat=c(cf[["t value"]], cf[["z value"]]),
       p_value=c(cf[["Pr(>|t|)"]], cf[["Pr(>|z|)"]]),
-      mse=mean(m[["residuals"]]^2, na.rm=T),
+      # mse=mean(m[["residuals"]]^2, na.rm=T),
       stringsAsFactors=FALSE
     )
-  } else {
+  } else if (model_simulation$models[["type"]] == "multisynth") {
     m <- model_simulation$model_result
     cf <- summary(m)
     cf <- cf$att
@@ -486,7 +763,7 @@ selbias_postmodel <- function(model_simulation) {
     variance <- se ^ 2
     t_stat <- NA
     p_value <- 2 * pnorm(abs(estimate/se), lower.tail = FALSE)
-    mse <- mean(unlist(lapply(m$residuals, function(x) {mean(x^2)})))
+    # mse <- mean(unlist(lapply(m$residuals, function(x) {mean(x^2)})))
     
     r <- data.frame(
       outcome=outcome,
@@ -496,7 +773,30 @@ selbias_postmodel <- function(model_simulation) {
       variance=variance,
       t_stat=NA,
       p_value=p_value,
-      mse=mse,
+      # mse=mse,
+      stringsAsFactors=FALSE
+    )
+  } else if (model_simulation$models[["type"]] == "did") {
+    m <- model_simulation$model_result
+    m_agg <- did::aggte(m, type='dynamic', na.rm=T)
+    cf <- summary(m_agg, returnOutput = TRUE, verbose = FALSE)[[1]]
+    colnames(cf) <- trimws(colnames(cf))
+    estimate <- cf$ATT
+    se <- cf[["Std. Error"]]
+    variance <- se ^ 2
+    t_stat <- NA
+    p_value <- 2 * pnorm(abs(estimate/se), lower.tail = FALSE)
+    # mse <- mean(unlist(lapply(m$residuals, function(x) {mean(x^2)})))
+    
+    r <- data.frame(
+      outcome=outcome,
+      se_adjustment="none",
+      estimate=estimate,
+      se=se,
+      variance=variance,
+      t_stat=NA,
+      p_value=p_value,
+      # mse=mse,
       stringsAsFactors=FALSE
     )
   }
@@ -513,9 +813,10 @@ selbias_postmodel <- function(model_simulation) {
       variance=h_se ^ 2,
       t_stat=estimate / h_se,
       p_value=2 * pnorm(abs(estimate / h_se), lower.tail=FALSE),
-      mse=mean(m[["residuals"]]^2, na.rm=T),
+      # mse=mean(m[["residuals"]]^2, na.rm=T),
       stringsAsFactors=FALSE
     )
+    
     r <- rbind(r, h_r)
     rownames(r) <- NULL
   }
@@ -539,7 +840,7 @@ selbias_postmodel <- function(model_simulation) {
       variance=clust_coeffs[["Std. Error"]] ^ 2,
       t_stat=c(clust_coeffs[["z value"]], clust_coeffs[["t value"]]),
       p_value=c(clust_coeffs[["Pr(>|z|)"]], clust_coeffs[["Pr(>|t|)"]]),
-      mse=mean(m[["residuals"]]^2, na.rm=T),
+      # mse=mean(m[["residuals"]]^2, na.rm=T),
       stringsAsFactors=FALSE
     )
     
@@ -560,9 +861,10 @@ selbias_postmodel <- function(model_simulation) {
       variance=hc_se ^ 2,
       t_stat=estimate / hc_se,
       p_value=2 * pnorm(abs(estimate / hc_se), lower.tail=FALSE),
-      mse=mean(m[["residuals"]]^2, na.rm=T),
+      # mse=mean(m[["residuals"]]^2, na.rm=T),
       stringsAsFactors=FALSE
     )
+    
     r <- rbind(r, hc_r)
     rownames(r) <- NULL
   }
