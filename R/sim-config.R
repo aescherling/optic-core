@@ -38,6 +38,7 @@ SimConfig <- R6::R6Class(
     
     setup_single_simulation = function(i) {
       params <- as.list(self$simulation_params[i, ])
+      params$params <- params
       params$data <- self$data
       params$models <- self$models
       params$iters <- self$iters
