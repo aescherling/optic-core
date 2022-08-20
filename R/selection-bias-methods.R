@@ -435,7 +435,7 @@ selbias_sample <- function(single_simulation) {
     x_t <- x[x[[time_var]]==time,]
     
     # augment outcomes
-    x_t$new <- x_t[[outcomes]] +
+    x_t[[outcomes]] <- x_t[[outcomes]] +
       (a1 * x_t$prior_control) +
       (a2 * x_t$unemploymentrate) +
       (a3 * (x_t$prior_control * x_t$unemploymentrate)) +
