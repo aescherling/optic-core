@@ -8,6 +8,38 @@ library(ggdist)
 library(ggplot2)
 library(ggrepel)
 library(patchwork)
+library(tidyr)
+
+# load the actual data ----------------------------------------------------
+
+load("/poppy/data/derived_data/ascherli/optic-core/data/optic_sim_data_exp.Rdata")
+names(x) <- tolower(names(x))
+
+x <- x %>%
+  select(state, fipscode, year, crude.rate, population, unemploymentrate) %>%
+  mutate(crude.rate.old = crude.rate) %>% 
+  arrange(state, year) %>%
+  group_by(state) %>%
+  mutate(lag1 = lag(crude.rate, n=1L),
+         lag2 = lag(crude.rate, n=2L),
+         lag3 = lag(crude.rate, n=3L)) %>%
+  ungroup() %>%
+  rowwise() %>%
+  # code in moving average and trend versions of prior control
+  mutate(prior_control_mva3_OLD = mean(c(lag1, lag2, lag3)),
+         prior_control_trend_OLD = lag1 - lag3) %>%
+  ungroup() %>%
+  select(-lag1, -lag2, -lag3) %>%
+  mutate(state = factor(as.character(state)))
+
+# mean and standard deviation of the outcome
+mean(x$crude.rate)
+sd(x$crude.rate)
+
+
+# make summaries ----------------------------------------------------------
+
+
 
 summarize_simulated_data <- function(data_path) {
   
@@ -16,11 +48,10 @@ summarize_simulated_data <- function(data_path) {
   sim_data <- arrow::open_dataset(data_path)
   
   params <- sim_data %>%
-    select(simulation, unit_var, time_var, policy_speed, effect_magnitude,
+    count(simulation, unit_var, time_var, policy_speed, effect_magnitude,
            effect_direction, prior_control, bias_type, bias_size, 
            n_implementation_periods) %>%
-    collect() %>%
-    unique()
+    collect()
   
   
   sim41 <- sim_data %>% filter(simulation==41) %>% collect()
@@ -189,10 +220,67 @@ summarize_simulated_data <- function(data_path) {
               .groups = 'drop') %>%
     ggplot(aes(y = simulation,
                x = n_treated,
-               fill = stat(cut_cdf_qi(cdf)))) +
-    stat_halfeye() + 
-    scale_fill_brewer() +
+               size = after_stat(level))) +
+    stat_pointinterval(show.legend = TRUE) + 
+    scale_size_discrete(name = 'Level') + 
+    theme_minimal()
+  
+  
+  # standardized mean differences between treated and untreated states
+  
+  # this version looks at post-treatment vs pre-treatment observations
+  sim_data %>% 
+    mutate(treated = treatment > 0) %>% 
+    group_by(simulation, iteration, treated) %>%
+    summarize(mean = mean(crude.rate),
+              variance = var(crude.rate),
+              n = n()) %>%
+    collect() %>%
+    pivot_wider(names_from = treated,
+                values_from = c(mean, variance, n)) %>%
+    mutate(simulation = factor(simulation, levels = 60:1),
+           pooled_sd = sqrt(
+             ((n_TRUE - 1) * variance_TRUE + (n_FALSE - 1) * variance_FALSE) /
+               (n_TRUE + n_FALSE - 2)
+           ),
+           cohen_d = (mean_TRUE - mean_FALSE) / pooled_sd) %>%
+    ggplot(aes(y = simulation,
+               x = cohen_d,
+               size = after_stat(level))) +
+    stat_pointinterval(show.legend = TRUE) + 
+    scale_size_discrete(name = 'Level') + 
+    theme_minimal()
+  
+  # this version looks at treated vs. untreated, i.e. for treated states
+  # the pre-treatment data is lumped in with the post-treatment data
+  sim_data %>%
+    select(simulation, iteration, state, treatment, crude.rate) %>%
+    collect() %>% 
+    group_by(simulation, iteration, state) %>%
+    mutate(treated = any(treatment > 0)) %>%
+    ungroup() %>% 
+    group_by(simulation, iteration, treated) %>%
+    summarize(mean = mean(crude.rate),
+              variance = var(crude.rate),
+              n = n(),
+              .groups = 'drop') %>%
+    pivot_wider(names_from = treated,
+                values_from = c(mean, variance, n)) %>%
+    mutate(simulation = factor(simulation, levels = 60:1),
+           pooled_sd = sqrt(
+             ((n_TRUE - 1) * variance_TRUE + (n_FALSE - 1) * variance_FALSE) /
+               (n_TRUE + n_FALSE - 2)
+           ),
+           cohen_d = (mean_TRUE - mean_FALSE) / pooled_sd) %>%
+    ggplot(aes(y = simulation,
+               x = cohen_d,
+               size = after_stat(level))) +
+    stat_pointinterval(show.legend = TRUE) + 
+    scale_size_discrete(name = 'Level') + 
+    scale_x_continuous(breaks = seq(0, 1, 0.1)) +
     theme_minimal()
   
     
 }
+
+

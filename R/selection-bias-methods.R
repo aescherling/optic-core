@@ -255,272 +255,213 @@ summary.AGGTEobj <- function(object, ..., returnOutput = FALSE, verbose = TRUE) 
 #' 
 #' @export
 selbias_sample <- function(single_simulation) {
+  
+  # get simulation specifications
   x <- single_simulation$data
-  pc = single_simulation$prior_control
-  
-  if (single_simulation$prior_control == "mva3") {
-    x$prior_control <- x$prior_control_mva3_OLD
-    x$prior_control_old <- x$prior_control_mva3_OLD
-  } else if (single_simulation$prior_control == "trend") {
-    x$prior_control <- x$prior_control_trend_OLD
-    x$prior_control_old <- x$prior_control_trend_OLD
-  } else {
-    stop("invalid prior control option, must be either 'mva3' or 'trend'")
-  }
-  
+  pc <- single_simulation$prior_control
   unit_var <- single_simulation$unit_var
   time_var <- single_simulation$time_var
   effect_magnitude <- single_simulation$effect_magnitude
   effect_direction <- single_simulation$effect_direction
   policy_speed <- single_simulation$policy_speed
   number_implementation_years <- as.numeric(single_simulation$n_implementation_periods)
-  bias_vals <- single_simulation$globals[["bias_vals"]][[single_simulation$bias_type]][[single_simulation$prior_control]][[single_simulation$bias_size]]
-  model_type = names(single_simulation$models)
-  #############################
-  ### AUGMENT OUTCOME FIRST ###
-  #############################
-  # get the bias values for outcome augmentation
-  a1 <- bias_vals["a1"]#bias_vals$a1 
-  a2 <- bias_vals["a2"]#bias_vals$a2
-  a3 <- bias_vals["a3"]#bias_vals$a3
-  a4 <- bias_vals["a4"]#bias_vals$a4
-  a5 <- bias_vals["a5"]#bias_vals$a5
+  model_type <- names(single_simulation$models)
   
-  # since this is happening before the model loop in run_iteration, we need to make
-  # sure we augment all unique outcomes used by models
+  # since this is happening before the model loop in run_iteration, we need to 
+  # make sure we augment all unique outcomes used by models
   if (all(model_type != "did")) {
     outcomes <- unique(sapply(single_simulation$models, function(x) { optic::model_terms(x[["model_formula"]])[["lhs"]] }))
   } else if (any(model_type == 'did')) {
     outcomes <- as.character(single_simulation$models$did$model_args$yname)
   }
   
-  # 
-  # # apply bias to outcome
-  # for (outcome in outcomes) {
-  #     #Adj.Y = Y.obs+a1*mva3+a2*unemployment+a3*(mva3*unemployment)+a4*mva^2+a5*unemployment^2
-  #     x[[outcome]] <- x[[outcome]] + (a1 * x$prior_control) + (a2 * x$unemploymentrate) +
-  #       (a3 * (x$prior_control * x$unemploymentrate)) +
-  #       (a4 * (x$prior_control ^ 2)) + (a5 * (x$unemploymentrate ^ 2))
-  #   }
+  bias_vals <- single_simulation$globals[["bias_vals"]][[single_simulation$bias_type]][[single_simulation$prior_control]][[single_simulation$bias_size]]
   
-  ################################
-  ### IDENTIFY TREATMENT UNITS ###
-  ################################
-  # get bias vals for creating probability of selection
-  b0 <- bias_vals["b0"]#bias_vals$b0
-  b1 <- bias_vals["b1"]#bias_vals$b1 
-  b2 <- bias_vals["b2"]#bias_vals$b2
-  b3 <- bias_vals["b3"]#bias_vals$b3
-  b4 <- bias_vals["b4"]#bias_vals$b4
-  b5 <- bias_vals["b5"]#bias_vals$b5
+  # parameters for outcome augmentation
+  a1 <- bias_vals["a1"] 
+  a2 <- bias_vals["a2"]
+  a3 <- bias_vals["a3"]
+  a4 <- bias_vals["a4"]
+  a5 <- bias_vals["a5"]
   
-  # need to create a matrix of state x year 
-  # probabilities of being assigned to enact policy
-  available_units <- unique(x[[unit_var]])
-  # atp <- sort(unique(x[[time_var]]))[-1:-5]
-  # atp <- atp[-length(atp):-(length(atp)-1)]
-  atp <- sort(unique(x[[time_var]]))[-1:-3]
-  available_time_periods <- atp
+  # parameters for treatment selection
+  b0 <- bias_vals["b0"]
+  b1 <- bias_vals["b1"]
+  b2 <- bias_vals["b2"]
+  b3 <- bias_vals["b3"]
+  b4 <- bias_vals["b4"]
+  b5 <- bias_vals["b5"]
   
-  # For Each Year
-  for(t in 1:length(available_time_periods)){
-    
-    time = available_time_periods[t]
-    # Get treatment assignment
-    x_treat = x %>%
-      filter(!!as.name(time_var) == time) %>%
-      mutate(logits =
-               b0 +
-               (b1 * prior_control) +
-               (b2 * unemploymentrate) +
-               (b3 * (prior_control * unemploymentrate)) +
-               (b4 * (prior_control ^ 2)) +
-               (b5 * (unemploymentrate ^ 2))) %>%
-      dplyr::select(!!as.name(unit_var), !!as.name(time_var), logits) %>%
-      rowwise() %>%
-      mutate(trt_pr = exp(logits) / (1 + exp(logits)),
-             One_minus_trt_pr = 1-trt_pr) %>%
-      # check for cases where prob is 1
-      # (this replaces missing values with 1. why??)
-      mutate(trt_pr = case_when(is.na(trt_pr) ~ 1,
-                                TRUE ~ trt_pr)) %>%
-      mutate(One_minus_trt_pr = 1 - trt_pr) %>%
-      mutate(trt_ind = sample(c(0, 1), 1, prob = c(One_minus_trt_pr, trt_pr))) %>%
-      dplyr::select(-c(logits, One_minus_trt_pr, trt_pr))
-    
-    ##############################
-    ### APPLY TREATMENT EFFECT ###
-    ##############################
-    # x <- apply_treatment_effect(
-    #   x=x_treat,
-    #   model_formula=single_simulation$models$fixedeff_linear$model_formula,
-    #   model_call=single_simulation$models$fixedeff_linear$model_call,
-    #   te=effect_magnitude,
-    #   effect_direction=effect_direction,
-    #   concurrent=FALSE
-    # )
-    
-    # Update Outcomes (augment outcomes)
-    # the code commented out below doesn't work. values balloon to infinity. temporarily excluding. adam scherling 11/23/2021
-    # x_new <- x %>% dplyr::select(!!as.name(unit_var), !!as.name(time_var), !!as.name(outcomes)) %>%
-    #   rename(new = !!outcomes)
-    x_new = x %>%
-      filter(!!as.name(time_var) == time) %>%
-      mutate(!!outcomes :=
-               !!as.name(outcomes) +
-               (a1 * prior_control) +
-               (a2 * unemploymentrate) +
-               (a3 * (prior_control * unemploymentrate)) +
-               (a4 * (prior_control ^ 2)) +
-               (a5 * (unemploymentrate ^ 2))) %>%
-      dplyr::select(!!as.name(unit_var), !!as.name(time_var), !!as.name(outcomes)) %>%
-      rename(new = !!outcomes)
-    
-    # x_new = x %>%
-    #   filter({{time_var}} == time) %>%
-    #   mutate({{outcomes}} := 
-    #            {{outcomes}} +
-    #            (a1 * prior_control) +
-    #            (a2 * unemploymentrate) +
-    #            (a3 * (prior_control * unemploymentrate)) +
-    #            (a4 * (prior_control ^ 2)) +
-    #            (a5 * (unemploymentrate ^ 2))) %>%
-    #   dplyr::select({{unit_var}}, {{time_var}}, {{outcomes}}) %>%
-    #   rename(new = {{outcomes}})
-    
-    if(t==1){
-      x = x %>%
-        left_join(., x_treat, by = c(unit_var, time_var)) %>%
-        left_join(., x_new, by = c(unit_var, time_var)) %>%
-        mutate(!!outcomes := case_when(is.na(new) ~ !!as.name(outcomes),
-                                       TRUE ~ new)) %>%
-        dplyr::select(-new)
-    } else{
-      x_treat = x_treat %>%
-        rename(trt_ind_new = trt_ind)
-      x = x %>%
-        left_join(., x_treat, by = c(unit_var, time_var)) %>%
-        mutate(trt_ind = case_when(is.na(trt_ind_new) ~ trt_ind,
-                                   TRUE ~ trt_ind_new)) %>%
-        left_join(., x_new, by = c(unit_var, time_var)) %>%
-        mutate(!!outcomes := case_when(is.na(new) ~ !!as.name(outcomes),
-                                       TRUE ~ new)) %>%
-        dplyr::select(-c(new, trt_ind_new))
-    }
-    
-    # update prior control
-    if(pc == 'mva3'){
-      x = x %>%
-        group_by(!!as.name(unit_var)) %>%
-        mutate(lag1 = lag(!!as.name(outcomes), n=1L),
-               lag2 = lag(!!as.name(outcomes), n=2L),
-               lag3 = lag(!!as.name(outcomes), n=3L)) %>%
-        ungroup() %>%
-        rowwise() %>%
-        mutate(prior_control = mean(c(lag1, lag2, lag3))) %>%
-        ungroup() 
-    } else if(pc == 'trend'){
-      x = x %>%
-        group_by(!!as.name(unit_var)) %>%
-        mutate(lag1 = lag(!!as.name(outcomes), n=1L),
-               lag2 = lag(!!as.name(outcomes), n=2L),
-               lag3 = lag(!!as.name(outcomes), n=3L)) %>%
-        ungroup() %>%
-        rowwise() %>%
-        mutate(prior_control = lag1 - lag3) %>%
-        ungroup()
-    } else{
-      stop("invalid prior control option, must be either 'mva3' or 'trend'")
-    } 
+  # save values of prior control variable prior to augmenting the outcome
+  if (pc == "mva3") {
+    x$prior_control <- x$prior_control_mva3_OLD
+    x$prior_control_old <- x$prior_control_mva3_OLD
+  } else if (pc == "trend") {
+    x$prior_control <- x$prior_control_trend_OLD
+    x$prior_control_old <- x$prior_control_trend_OLD
+  } else {
+    stop("invalid prior control option, must be either 'mva3' or 'trend'")
   }
   
-  # Revise trt_ind matrix
-  x = x %>%
-    arrange(!!as.name(unit_var), !!as.name(time_var)) %>%
-    group_by(!!as.name(unit_var)) %>%
-    mutate(isfirst = as.numeric(trt_ind == 1 & !duplicated(trt_ind==1))) %>%
-    mutate(trt_ind = cumsum(tidyr::replace_na(isfirst,0)))
+  # unique study units
+  available_units <- unique(x[[unit_var]])
   
-  # Get time_periods and n_treated
-  # (1) time periods
-  the_treated = x %>%
-    filter(isfirst==1) %>%
-    dplyr::select(!!as.name(unit_var), !!as.name(time_var)) 
-  time_periods = x %>% 
-    filter(!!as.name(time_var) == min(!!as.name(time_var))) %>%
-    dplyr::select(!!as.name(unit_var)) %>%
-    left_join(., the_treated, by = c(unit_var)) 
-  time_periods = time_periods$year
-  time_periods[is.na(time_periods)] = Inf
-  # (2) n_treated
-  n_treated = x %>%
-    group_by(!!as.name(unit_var)) %>%
-    summarize(trt_ind_sum = sum(trt_ind), .groups='drop')
-  n_treated = n_treated$trt_ind_sum
+  # unique study time periods, excluding the first 3 which are used for prior control
+  available_time_periods <- sort(unique(x[[time_var]]))[-1:-3]
   
+  # Generate treatment assignments one year at a time
+  for (t in 1:length(available_time_periods)) {
+    
+    # subset the data to this year
+    time = available_time_periods[t]
+    
+    x_t <- x[x[[time_var]]==time,]
+    
+    # generate treatment assignments
+    logits <- b0 +
+      (b1 * x_t$prior_control) +
+      (b2 * x_t$unemploymentrate) +
+      (b3 * (x_t$prior_control * x_t$unemploymentrate)) +
+      (b4 * (x_t$prior_control ^ 2)) +
+      (b5 * (x_t$unemploymentrate ^ 2))
+    
+    trt_pr <- exp(logits) / (1 + exp(logits))
+    
+    x_t$trt_ind = sapply(trt_pr, function(p) sample(c(0, 1), 1, prob = c(1 - p, p)))
+    
+    # add the modified data for this time period to the full dataset
+    x <- dplyr::bind_rows(x[x[[time_var]]!=time,], x_t) %>%
+      arrange(!!as.name(unit_var), !!as.name(time_var))
+    
+  }
+  
+  # For the first three time periods, treatment indicator will be missing. 
+  # Set to 0.
+  x$trt_ind[x[[time_var]]==sort(unique(x[[time_var]]))[1:3]] <- 0
+  
+  # For treated units, set the treatment indicator to 1 from the 
+  # earliest treatment date onwards
+  x$trt_ind <- unlist(tapply(x$trt_ind, x[[unit_var]], 
+                             function(x) pmin(1, cumsum(x))))
+  
+  # get the time of first treatment for each unit
+  # min() automatically returns Inf for untreated units
+  time_periods <- unlist(tapply(x[[time_var]] * x$trt_ind, x[[unit_var]],
+                                function(x) min(x[x > 0])))
+
+  # calculate the number of treatment periods for each unit
+  n_treated <- unlist(tapply(x$trt_ind, x[[unit_var]], sum))
+  
+  # subset to only the treated units
   sampled_units <- available_units[n_treated > 0]
   start_periods <- time_periods[n_treated > 0]
   
-  treated <- list()
-  for (i in 1:length(sampled_units)) { 
-    yr <- start_periods[i]
-    current_unit <- as.character(sampled_units[i])
-    # change if don't want everything to be years/months
-    mo <- sample(1:12, 1)
-    if (policy_speed == "slow") {
-      treated[[current_unit]] <- list(
-        policy_years = yr:max(x$year, na.rm=TRUE),
-        policy_month = mo,
-        exposure = optic:::calculate_exposure(mo, number_implementation_years),
-        policy_date = as.Date(paste0(yr, '-', mo, '-01'))
-      )
+  # for treated units, randomly pick an implementation month and
+  # calculate the amount of exposure based on implementation speed
+  if (length(sampled_units) > 0) {
+    
+    treated <- list()
+    
+    for (i in 1:length(sampled_units)) { 
       
-      n <- length(treated[[current_unit]][["policy_years"]])
-      exposure <- treated[[current_unit]][["exposure"]]
-      if (n < length(exposure)) {
-        treated[[current_unit]][["exposure"]] <- exposure[1:n]
-      } else {
-        n_more_years <- n - length(exposure)
-        treated[[current_unit]][["exposure"]] <- c(exposure, rep(1, n_more_years))
+      yr <- start_periods[i]
+      current_unit <- as.character(sampled_units[i])
+      mo <- sample(1:12, 1)
+      
+      if (policy_speed == "slow") {
+        treated[[current_unit]] <- list(
+          policy_years = yr:max(x$year, na.rm=TRUE),
+          policy_month = mo,
+          exposure = optic:::calculate_exposure(mo, number_implementation_years),
+          policy_date = as.Date(paste0(yr, '-', mo, '-01'))
+        )
+        
+        n <- length(treated[[current_unit]][["policy_years"]])
+        exposure <- treated[[current_unit]][["exposure"]]
+        if (n < length(exposure)) {
+          treated[[current_unit]][["exposure"]] <- exposure[1:n]
+        } else {
+          n_more_years <- n - length(exposure)
+          treated[[current_unit]][["exposure"]] <- c(exposure, rep(1, n_more_years))
+        }
+      } else if (policy_speed == "instant") {
+        treated[[current_unit]] <- list(
+          policy_years = yr:max(x$year, na.rm=TRUE),
+          policy_month = mo,
+          exposure = c((12 - mo + 1)/12, rep(1, length(yr:max(x[[time_var]]))-1)),
+          policy_date = as.Date(paste0(yr, '-', mo, '-01'))
+        )
       }
-    } else if (policy_speed == "instant") {
-      treated[[current_unit]] <- list(
-        policy_years = yr:max(x$year, na.rm=TRUE),
-        policy_month = mo,
-        exposure = c((12 - mo + 1)/12, rep(1, length(yr:max(x[[time_var]]))-1)),
-        policy_date = as.Date(paste0(yr, '-', mo, '-01'))
-      )
     }
+    
+    # create a new treatment indicator variable based on the policy exposure
+    policy_dates = purrr::transpose(treated)$policy_date %>% 
+      dplyr::bind_rows() %>% 
+      tidyr::gather(!!unit_var, treatment_date) 
+    
+    if (is.factor(x[[unit_var]])) {
+      policy_dates = policy_dates %>%
+        dplyr::mutate_if(is.character, factor)
+    } else{
+      policy_dates = policy_dates %>%
+        dplyr::mutate_if(is.character, as.double)
+    }
+    
+    x_policy_info <- x[x$trt_ind==1, c(unit_var, time_var)]
+    
+    x_policy_info$treatment = purrr::transpose(treated)$exposure %>% unlist
+    
+    x_policy_info = x_policy_info %>%
+      dplyr::left_join(., policy_dates, by = unit_var)
+    
+    # merge the new treatment indicator into the data
+    x = x %>%
+      dplyr::left_join(., x_policy_info, by = c(unit_var, time_var)) %>%
+      dplyr::mutate(treatment = case_when(is.na(treatment) ~ 0,
+                                          TRUE ~ treatment),
+                    treatment_date = case_when(is.na(treatment_date) ~ as.Date(NA),
+                                               TRUE ~ treatment_date))
+  } else {
+   x$treatment <- 0
+   x$treatment_date <- as.Date(NA)
   }
-  # apply treatment to data
-  # Get policy date and exposure in proper format 
-  policy_dates = purrr::transpose(treated)$policy_date %>% 
-    dplyr::bind_rows() %>% 
-    tidyr::gather(!!unit_var, treatment_date) 
   
-  if(is.factor(x[[unit_var]])){
-    policy_dates = policy_dates %>%
-      dplyr::mutate_if(is.character, factor)
-  } else{
-    policy_dates = policy_dates %>%
-      dplyr::mutate_if(is.character, as.double)
+  # Augment outcomes one year at a time
+  for (t in 1:length(available_time_periods)) {
+    
+    # subset the data to this year
+    time = available_time_periods[t]
+    
+    x_t <- x[x[[time_var]]==time,]
+    
+    # augment outcomes
+    x_t$new <- x_t[[outcomes]] +
+      (a1 * x_t$prior_control) +
+      (a2 * x_t$unemploymentrate) +
+      (a3 * (x_t$prior_control * x_t$unemploymentrate)) +
+      (a4 * (x_t$prior_control ^ 2)) +
+      (a5 * (x_t$unemploymentrate ^ 2)) +
+         (-1)^(effect_direction=='neg') * effect_magnitude * x_t$treatment
+    
+    # add the modified data for this time period to the full dataset
+    x <- dplyr::bind_rows(x[x[[time_var]]!=time,], x_t) %>%
+      arrange(!!as.name(unit_var), !!as.name(time_var))
+    
+    # update prior control
+    x$lag1 <- unlist(tapply(x[[outcomes]], x[[unit_var]], function(x) dplyr::lag(x, n=1)), use.names = F)
+    x$lag2 <- unlist(tapply(x[[outcomes]], x[[unit_var]], function(x) dplyr::lag(x, n=2)), use.names = F)
+    x$lag3 <- unlist(tapply(x[[outcomes]], x[[unit_var]], function(x) dplyr::lag(x, n=3)), use.names = F)
+    
+    if(pc == 'mva3'){
+      x$prior_control = (x$lag1 + x$lag2 + x$lag3) / 3
+    } else if(pc == 'trend'){
+      x$prior_control = x$lag1 - x$lag3
+    } else{
+      stop("invalid prior control option, must be either 'mva3' or 'trend'")
+    } 
+    
   }
   
-  x_policy_info = x %>%
-    dplyr::filter(trt_ind == 1) %>%
-    dplyr::select(!!as.name(unit_var), !!as.name(time_var))
-  x_policy_info$treatment = purrr::transpose(treated)$exposure %>% unlist
-  
-  x_policy_info = x_policy_info %>%
-    dplyr::left_join(., policy_dates, by = unit_var)
-  
-  # apply treatment to data
-  x = x %>%
-    dplyr::left_join(., x_policy_info, by = c(unit_var, time_var)) %>%
-    dplyr::mutate(treatment = case_when(is.na(treatment) ~ 0,
-                                        TRUE ~ treatment),
-                  treatment_date = case_when(is.na(treatment_date) ~ as.Date(NA),
-                                             TRUE ~ treatment_date))
   
   # create level and change code versions of treatment variable
   x$treatment_level <- x$treatment
